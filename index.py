@@ -1,4 +1,4 @@
-from flask import Flask, request, flash, jsonify
+from flask import Flask, request, flash, jsonify, send_from_directory
 import sqlite3
 import json
 import os
@@ -17,7 +17,7 @@ c.execute('''CREATE TABLE IF NOT EXISTS profiles (id INTEGER PRIMARY KEY, userna
 conn.commit()
 conn.close()
 
-@app.route('/home/<username>', methods=['GET'])  # Set the HTTP method to GET
+@app.route('/home/<username>', methods=['GET'])  
 def home(username):
     conn = sqlite3.connect('./mains.db')
     c = conn.cursor()
@@ -31,9 +31,10 @@ def home(username):
     if posts:
         post_list = []
         for post in posts:
+            img_url = post[2].replace('\\', '/') if post[2] else None  # Replace backslashes with forward slashes
             post_dict = {
                 'username': post[1],
-                'img': post[2],
+                'img': img_url,
                 'likes': post[3],
                 'caption': post[4]
             }
@@ -42,6 +43,11 @@ def home(username):
         return jsonify({'posts': post_list})
     else:
         return jsonify({'message': 'No posts found for this user'})
+    
+@app.route('/uploads/<path:filename>')
+def serve_file(filename):
+    root_dir = os.path.dirname(os.path.abspath(__file__))
+    return send_from_directory(os.path.join(root_dir, 'uploads'), filename)
     
 @app.route('/addPost/<username>', methods=['POST'])
 def addPost(username):
@@ -58,9 +64,9 @@ def addPost(username):
 
             if existing_user:
                 # Save the image with a secure and unique name in the ./uploads directory
-                upload_dir = './uploads'
+                upload_dir = 'uploads'
                 current_timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')[:-3]  # Format timestamp
-                filename = secure_filename(f"{current_timestamp}.jpg")
+                filename = secure_filename(f"{current_timestamp}.png")
                 if not os.path.exists(upload_dir):
                     os.makedirs(upload_dir)
                 image_path = os.path.join(upload_dir, filename)
@@ -71,7 +77,11 @@ def addPost(username):
                 c.execute('INSERT INTO posts (username, img, caption) VALUES (?, ?, ?)', (username, image_path, caption))
                 conn.commit()
                 conn.close()
-                return jsonify({'message': 'Post added successfully', 'image_path': image_path})
+                
+                # Correct the image URL by replacing backslashes with forward slashes
+                image_url = f"http://192.168.43.147:5000/{image_path.replace(os.path.sep, '/')}"
+
+                return jsonify({'message': 'Post added successfully', 'image_path': image_url})
             else:
                 conn.close()
                 return jsonify({'message': 'Username not found'}), 404
@@ -79,6 +89,7 @@ def addPost(username):
             return jsonify({'message': 'Caption is required'}), 409
     except Exception as e:
         return jsonify({'message': f'Error: {str(e)}'}), 500
+
 
 
 @app.route('/register', methods=['POST'])
