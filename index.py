@@ -4,9 +4,12 @@ import json
 import os
 import datetime
 from werkzeug.utils import secure_filename
+from flask_cors import CORS
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'orenonawaerenjaeger'
+cors = CORS(app, resources={r"/*": {"origins": "*"}})  # Allow all origins
+
 
 
 conn = sqlite3.connect('./mains.db')
@@ -53,6 +56,7 @@ def serve_file(filename):
 def addPost(username):
     try:
         caption = request.form.get('caption')
+        likes = 0
 
         if caption is not None:
             conn = sqlite3.connect('./mains.db')
@@ -74,7 +78,7 @@ def addPost(username):
                 image_data.save(image_path)
 
                 # Insert the new post with the image path
-                c.execute('INSERT INTO posts (username, img, caption) VALUES (?, ?, ?)', (username, image_path, caption))
+                c.execute('INSERT INTO posts (username, img, likes, caption) VALUES (?, ?, ?, ?)', (username, image_path, likes, caption))
                 conn.commit()
                 conn.close()
                 
@@ -194,6 +198,19 @@ def addProfile():
         conn.commit()
         conn.close()
         return jsonify({'message': 'Profile added successfully'})
+    
+@app.route('/addLike/<username>', methods=['POST'])
+def addLike(username):
+    likes = int(request.form.get('likes')) + 1
+    print(likes)
+    
+    conn = sqlite3.connect('./mains.db')
+    c = conn.cursor()
+    c.execute('UPDATE posts SET likes = ? WHERE username = ?', (likes, username))
+    conn.commit()
+    conn.close()
+    
+    return jsonify({'message' : 'Like successfully updated'})
 
 
 
