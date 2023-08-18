@@ -5,10 +5,12 @@ import os
 import datetime
 from werkzeug.utils import secure_filename
 from flask_cors import CORS
+from flask_socketio import SocketIO
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'orenonawaerenjaeger'
 cors = CORS(app, resources={r"/*": {"origins": "*"}})  # Allow all origins
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 
 
@@ -202,16 +204,40 @@ def addProfile():
 @app.route('/addLike/<username>', methods=['POST'])
 def addLike(username):
     likes = int(request.form.get('likes')) + 1
+    id = request.form.get('id')
     print(likes)
+    print(id)
     
     conn = sqlite3.connect('./mains.db')
     c = conn.cursor()
-    c.execute('UPDATE posts SET likes = ? WHERE username = ?', (likes, username))
+    c.execute('UPDATE posts SET likes = ? WHERE username = ? AND caption = ?', (likes, username, id))
     conn.commit()
     conn.close()
     
     return jsonify({'message' : 'Like successfully updated'})
 
+@app.route('/getProfile/<username>', methods=['GET'])
+def getProfile(username):
+    conn = sqlite3.connect('./mains.db')
+    c = conn.cursor()
+    c.execute('SELECT * FROM profiles WHERE username = ?', (username,))
+    user = c.fetchone()
+    conn.close()
+    
+    if user is not None:
+        # Assuming your profiles table has columns like 'username', 'full_name', 'bio', etc.
+        profile_data = {
+            'id': user[0],
+            'username': user[1],
+            'bio': user[2],
+            'followers': user[3],
+            'following': user[4],
+            'post_no': user[5]
+            # Add more fields as needed
+        }
+        return jsonify(profile_data)
+    else:
+        return jsonify({'error': 'User not found'}), 404
 
 
 
