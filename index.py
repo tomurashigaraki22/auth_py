@@ -229,10 +229,11 @@ def getProfile(username):
         profile_data = {
             'id': user[0],
             'username': user[1],
-            'bio': user[2],
-            'followers': user[3],
-            'following': user[4],
-            'post_no': user[5]
+            'bio': user[3],
+            'followers': user[4],
+            'following': user[5],
+            'post_no': user[6],
+            'img': user[2]
             # Add more fields as needed
         }
         return jsonify(profile_data)
