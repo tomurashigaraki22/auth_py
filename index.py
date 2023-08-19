@@ -51,6 +51,29 @@ def search(query):
         return jsonify(search_results)
     else:
         return jsonify([])  # Return an empty list if no results found
+    
+@app.route('/checkFollow/<username>', methods=['POST'])
+def check_follow(username):
+    user_to_check = request.form.get('user2check')  # Use json data instead of form data
+    conn = sqlite3.connect('./mains.db')
+    c = conn.cursor()
+    c.execute('SELECT followers_ FROM followers_list WHERE username = ?', (user_to_check,))
+    followers_data = c.fetchone()
+
+    if followers_data:
+        followers_string = followers_data[0]  # Extract the string from the tuple
+        f_d = followers_string.split(',')
+        print("Followers string:", followers_string)  # Print for debugging
+        print("Followers list:", f_d)  # Print for debugging
+
+        if username in f_d:
+            return jsonify({'status': 'following'})
+        else:
+            return jsonify({'status': 'not_following'})
+    else:
+        return jsonify({'status': 'user_not_found'})
+
+
 
 
 @app.route('/addFollower/<username>', methods=['POST'])
