@@ -61,6 +61,7 @@ def check_follow(username):
     c = conn.cursor()
     c.execute('SELECT followers_ FROM followers_list WHERE username = ?', (user_to_check,))
     followers_data = c.fetchone()
+    fo = followers_data
     conn.commit()
     conn.close()
 
