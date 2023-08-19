@@ -9,7 +9,7 @@ from flask_socketio import SocketIO
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'orenonawaerenjaeger'
-cors = CORS(app, resources={r"/*": {"origins": "*"}})  # Allow all origins
+cors = CORS(app, resources={r"/*": {"origins": "*"}})
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 
@@ -19,8 +19,131 @@ c = conn.cursor()
 c.execute('''CREATE TABLE IF NOT EXISTS authentication (id INTEGER PRIMARY KEY, username TEXT, password TEXT)''')
 c.execute('''CREATE TABLE IF NOT EXISTS posts (id INTEGER PRIMARY KEY, username TEXT, img TEXT, likes INTEGER, caption TEXT)''')
 c.execute('''CREATE TABLE IF NOT EXISTS profiles (id INTEGER PRIMARY KEY, username TEXT, img TEXT, bio TEXT, followers INTEGER, following INTEGER, post_no INTEGER)''')
+c.execute('''CREATE TABLE IF NOT EXISTS followers_list (id INTEGER PRIMARY KEY, username TEXT, followers_ TEXT)''')
 conn.commit()
 conn.close()
+
+
+@app.route('/search/<query>', methods=['POST', 'GET'])
+def search(query):
+    conn = sqlite3.connect('./mains.db')
+    c = conn.cursor()
+    query_with_wildcard = f'%{query}%'  # Add wildcards to the query
+
+    c.execute('SELECT * FROM profiles WHERE username LIKE ?', (query_with_wildcard,))
+    users = c.fetchall()
+    conn.close()
+
+    search_results = []
+
+    if users:
+        for user in users:
+            user_dict = {
+                'username': user[1],
+                'bio': user[3],
+                'img': user[2],
+                'followers': user[4],
+                'following': user[5],
+                'post_no': user[6]
+            }
+            search_results.append(user_dict)
+
+        return jsonify(search_results)
+    else:
+        return jsonify([])  # Return an empty list if no results found
+
+
+@app.route('/addFollower/<username>', methods=['POST'])
+def addFollower(username):
+    user_to_follow = request.form.get('to_follow')
+    
+    conn = sqlite3.connect('./mains.db')
+    c = conn.cursor()
+    
+    # Fetch the current followers list for the user
+    c.execute('SELECT followers_ FROM followers_list WHERE username = ?', (username,))
+    followers_data = c.fetchone()
+
+    if followers_data:
+        current_followers = followers_data[0]
+        updated_followers = current_followers + ',' + user_to_follow
+
+        # Update the followers list in the database
+        c.execute('UPDATE followers_list SET followers_ = ? WHERE username = ?', (updated_followers, username))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': f'{user_to_follow} is now following {username}'})
+    else:
+        conn.close()
+        return jsonify({'message': 'User not found'})
+    
+    
+@app.route('/unfollow/<username>', methods=['POST'])
+def unfollow(username):
+    user_to_unfollow = request.form.get('user_to_unfollow')  # Corrected parameter name
+    
+    conn = sqlite3.connect('./mains.db')
+    c = conn.cursor()
+    
+    # Fetch the current followers list for the user
+    c.execute('SELECT followers_ FROM followers_list WHERE username = ?', (username,))
+    followers_data = c.fetchone()
+
+    if followers_data:
+        current_followers = followers_data[0].split(',')
+        if user_to_unfollow in current_followers:
+            current_followers.remove(user_to_unfollow)
+            updated_followers = ','.join(current_followers)
+
+            # Update the followers list in the database
+            c.execute('UPDATE followers_list SET followers_ = ? WHERE username = ?', (updated_followers, username))
+            conn.commit()
+            conn.close()
+            return jsonify({'message': f'{user_to_unfollow} unfollowed {username}'})
+        else:
+            conn.close()
+            return jsonify({'message': f'{user_to_unfollow} is not following {username}'})
+    else:
+        conn.close()
+        return jsonify({'message': 'User not found'})
+
+
+@app.route('/main/<username>', methods=['GET'])
+def main(username):
+    conn = sqlite3.connect('./mains.db')
+    c = conn.cursor()
+
+    # Retrieve the followers list for the given username
+    c.execute('SELECT followers_ FROM followers_list WHERE username = ?', (username,))
+    followers_data = c.fetchone()
+
+    if followers_data:
+        followers_list = followers_data[0].split(',')
+        followers_list = [follower.strip() for follower in followers_list]  # Trim whitespace
+        print(followers_list)
+
+        # Fetch posts for each follower
+        post_list_s = []
+        for follower in followers_list:
+            c.execute('SELECT * FROM posts WHERE username = ?', (follower,))
+            posts = c.fetchall()
+            for post in posts:
+                img_url = post[2].replace('\\', '/') if post[2] else None
+                post_dict = {
+                    'username': post[1],
+                    'img': img_url,
+                    'likes': post[3],
+                    'caption': post[4]
+                }
+                post_list_s.append(post_dict)
+        conn.commit()
+        conn.close()
+        return jsonify({'posts': post_list_s})
+    else:
+        conn.close()
+        return jsonify({'message': 'No followers found for this user'})
+
+
 
 @app.route('/home/<username>', methods=['GET'])  
 def home(username):
