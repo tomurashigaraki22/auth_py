@@ -1,4 +1,5 @@
-from flask import Flask, request, flash, jsonify, send_from_directory
+
+ flask import Flask, request, flash, jsonify, send_from_directory
 import sqlite3
 import json
 import os
@@ -59,6 +60,8 @@ def check_follow(username):
     c = conn.cursor()
     c.execute('SELECT followers_ FROM followers_list WHERE username = ?', (user_to_check,))
     followers_data = c.fetchone()
+    conn.commit()
+    conn.close()
 
     if followers_data:
         followers_string = followers_data[0]  # Extract the string from the tuple
