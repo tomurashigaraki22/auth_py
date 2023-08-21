@@ -61,7 +61,9 @@ def check_follow(username):
     c.execute('SELECT followers_ FROM followers_list WHERE username = ?', (user_to_check,))
     followers_data = c.fetchone()
     conn.commit()
-    conn.close()
+    conn.close
+
+ 
     if followers_data:
         followers_string = followers_data[0]  # Extract the string from the tuple
         f_d = followers_string.split(',')
