@@ -1,5 +1,4 @@
-
- flask import Flask, request, flash, jsonify, send_from_directory
+flask import Flask, request, flash, jsonify, send_from_directory
 import sqlite3
 import json
 import os
