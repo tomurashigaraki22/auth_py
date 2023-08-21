@@ -20,6 +20,8 @@ c.execute('''CREATE TABLE IF NOT EXISTS authentication (id INTEGER PRIMARY KEY, 
 c.execute('''CREATE TABLE IF NOT EXISTS posts (id INTEGER PRIMARY KEY, username TEXT, img TEXT, likes INTEGER, caption TEXT)''')
 c.execute('''CREATE TABLE IF NOT EXISTS profiles (id INTEGER PRIMARY KEY, username TEXT, img TEXT, bio TEXT, followers INTEGER, following INTEGER, post_no INTEGER)''')
 c.execute('''CREATE TABLE IF NOT EXISTS followers_list (id INTEGER PRIMARY KEY, username TEXT, followers_ TEXT)''')
+c.execute('''CREATE TABLE IF NOT EXISTS notification_follow (id INTEGER PRIMARY KEY, username TEXT, follower TEXT)''')
+c.execute('''CREATE TABLE IF NOT EXISTS notification_unfollow (id INTEGER PRIMARY KEY, username TEXT, unfollower TEXT)''')
 conn.commit()
 conn.close()
 
@@ -59,6 +61,8 @@ def check_follow(username):
     c = conn.cursor()
     c.execute('SELECT followers_ FROM followers_list WHERE username = ?', (user_to_check,))
     followers_data = c.fetchone()
+    conn.commit()
+    conn.close()
 
     if followers_data:
         followers_string = followers_data[0]  # Extract the string from the tuple
