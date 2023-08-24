@@ -5,7 +5,7 @@ import os
 import datetime
 from werkzeug.utils import secure_filename
 from flask_cors import CORS
-from flask_socketio import SocketIO
+from flask_socketio import SocketIO, emit
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'orenonawaerenjaeger'
@@ -17,7 +17,7 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 conn = sqlite3.connect('./mains.db')
 c = conn.cursor()
 c.execute('''CREATE TABLE IF NOT EXISTS authentication (id INTEGER PRIMARY KEY, username TEXT, password TEXT)''')
-c.execute('''CREATE TABLE IF NOT EXISTS posts (id INTEGER PRIMARY KEY, username TEXT, img TEXT, likes INTEGER, caption TEXT)''')
+c.execute('''CREATE TABLE IF NOT EXISTS posts (id INTEGER PRIMARY KEY, username TEXT, img TEXT, likes INTEGER, caption TEXT, height TEXT)''')
 c.execute('''CREATE TABLE IF NOT EXISTS profiles (id INTEGER PRIMARY KEY, username TEXT, img TEXT, bio TEXT, followers INTEGER, following INTEGER, post_no INTEGER)''')
 c.execute('''CREATE TABLE IF NOT EXISTS followers_list (id INTEGER PRIMARY KEY, username TEXT, followers_ TEXT)''')
 c.execute('''CREATE TABLE IF NOT EXISTS notification_follow (id INTEGER PRIMARY KEY, username TEXT, follower TEXT)''')
@@ -25,6 +25,12 @@ c.execute('''CREATE TABLE IF NOT EXISTS notification_unfollow (id INTEGER PRIMAR
 conn.commit()
 conn.close()
 
+def send_notification(username, message):
+    emit('notification', {'username': username, 'message': message}, namespace='/notifications')
+
+@socketio.on('connect', namespace='/notifications')
+def connect():
+    print('Client connected')
 
 @app.route('/search/<query>', methods=['POST', 'GET'])
 def search(query):
@@ -61,7 +67,6 @@ def check_follow(username):
     c = conn.cursor()
     c.execute('SELECT followers_ FROM followers_list WHERE username = ?', (user_to_check,))
     followers_data = c.fetchone()
-    fo = followers_data
     conn.commit()
     conn.close()
 
@@ -72,43 +77,90 @@ def check_follow(username):
         print("Followers list:", f_d)  # Print for debugging
 
         if username in f_d:
-            return jsonify({'status': 'following'})
+            return jsonify({
+                'status': 'following',
+                'no': len(f_d)
+                })
         else:
-            return jsonify({'status': 'not_following'})
+            return jsonify({
+                'status': 'not_following',
+                'no': len(f_d)
+                })
     else:
-        return jsonify({'status': 'user_not_found'})
+        return jsonify({'status': 'user_not_found',})
 
 
 
 
-@app.route('/addFollower/<username>', methods=['POST'])
-def addFollower(username):
-    user_to_follow = request.form.get('to_follow')
+@app.route('/addFollower/<username>/<usertofollow>', methods=['POST', 'GET'])
+def addFollower(username, usertofollow):
     
     conn = sqlite3.connect('./mains.db')
     c = conn.cursor()
     
+    
     # Fetch the current followers list for the user
-    c.execute('SELECT followers_ FROM followers_list WHERE username = ?', (username,))
+    c.execute('SELECT followers_ FROM followers_list WHERE username = ?', (usertofollow,))
     followers_data = c.fetchone()
-
-    if followers_data:
+    
+    if followers_data is not None:
+        print('Reached')
         current_followers = followers_data[0]
-        updated_followers = current_followers + ',' + user_to_follow
+        if current_followers is None:
+            current_followers = ''  # Set to an empty string if it's None
 
-        # Update the followers list in the database
-        c.execute('UPDATE followers_list SET followers_ = ? WHERE username = ?', (updated_followers, username))
+        if username not in current_followers:
+            updated_followers = current_followers + ',' + username
+        else:
+            print('Reached2')
+            return jsonify({'message': f'{username} is already following {usertofollow}'})
+        
+    # Rest of your code...
+
+
+    # Update the followers list in the database
+        print('Reached3')
+        c.execute('UPDATE followers_list SET followers_ = ? WHERE username = ?', (updated_followers, usertofollow))
+        conn.commit()
+        c.execute('INSERT INTO notification_follow (username, follower) VALUES (?, ?)', (usertofollow, f'{username} has followed you'))
+        conn.commit()
+
+        # Check if the username exists in the profiles table
+        c.execute('SELECT followers FROM profiles WHERE username = ?', (usertofollow,))
+        profile_data = c.fetchone()
+        print(profile_data)
+        print(len(profile_data))
+
+        if profile_data is not None:
+            # Update the followers count in the profiles table
+            print(current_followers)
+            updated_followers_count = len(current_followers) + 1
+            cs = current_followers.split(',')
+            css = len(cs) + 1
+            print(len(cs))
+            print(updated_followers_count)
+            c.execute('UPDATE profiles SET followers = ? WHERE username = ?', (css, usertofollow))
+            conn.commit()
+            conn.close()
+            return jsonify({'message': f'{username} is now following {usertofollow}'})
+        else:
+            conn.close()
+            return jsonify({'message': 'User not found in profiles table'})
+        
+    elif followers_data is None:
+        c.execute('INSERT INTO followers_list (username) VALUES (?)', (usertofollow, ))
         conn.commit()
         conn.close()
-        return jsonify({'message': f'{user_to_follow} is now following {username}'})
+        return jsonify({ 'message': f'{usertofollow} has been added to followers list'})
     else:
         conn.close()
         return jsonify({'message': 'User not found'})
+
+
     
     
-@app.route('/unfollow/<username>', methods=['POST'])
-def unfollow(username):
-    user_to_unfollow = request.form.get('user_to_unfollow')  # Corrected parameter name
+@app.route('/unfollow/<username>/<usertounfollow>', methods=['POST', 'GET'])
+def unfollow(username, usertounfollow):
     
     conn = sqlite3.connect('./mains.db')
     c = conn.cursor()
@@ -116,21 +168,30 @@ def unfollow(username):
     # Fetch the current followers list for the user
     c.execute('SELECT followers_ FROM followers_list WHERE username = ?', (username,))
     followers_data = c.fetchone()
+    print(followers_data)
+    
 
     if followers_data:
+        f_d_l = len(followers_data)
+        print(f_d_l)
         current_followers = followers_data[0].split(',')
-        if user_to_unfollow in current_followers:
-            current_followers.remove(user_to_unfollow)
+        aa = len(current_followers)
+        print(aa)
+        if usertounfollow in current_followers:
+            current_followers.remove(usertounfollow)
             updated_followers = ','.join(current_followers)
+            print(username)
 
             # Update the followers list in the database
             c.execute('UPDATE followers_list SET followers_ = ? WHERE username = ?', (updated_followers, username))
             conn.commit()
+            c.execute('UPDATE profiles SET followers = ? WHERE username = ?', (aa - 1, username))
+            conn.commit()
             conn.close()
-            return jsonify({'message': f'{user_to_unfollow} unfollowed {username}'})
+            return jsonify({'message': f'{usertounfollow} unfollowed {username}'})
         else:
             conn.close()
-            return jsonify({'message': f'{user_to_unfollow} is not following {username}'})
+            return jsonify({'message': f'{usertounfollow} is not following {username}'})
     else:
         conn.close()
         return jsonify({'message': 'User not found'})
@@ -161,7 +222,8 @@ def main(username):
                     'username': post[1],
                     'img': img_url,
                     'likes': post[3],
-                    'caption': post[4]
+                    'caption': post[4],
+                    'height': post[5]
                 }
                 post_list_s.append(post_dict)
         conn.commit()
@@ -209,6 +271,7 @@ def serve_file(filename):
 def addPost(username):
     try:
         caption = request.form.get('caption')
+        height = request.form.get('height')
         likes = 0
 
         if caption is not None:
@@ -231,7 +294,7 @@ def addPost(username):
                 image_data.save(image_path)
 
                 # Insert the new post with the image path
-                c.execute('INSERT INTO posts (username, img, likes, caption) VALUES (?, ?, ?, ?)', (username, image_path, likes, caption))
+                c.execute('INSERT INTO posts (username, img, likes, caption, height) VALUES (?, ?, ?, ?, ?)', (username, image_path, likes, caption, height))
                 conn.commit()
                 conn.close()
                 
@@ -272,6 +335,7 @@ def register():
                 # Insert the new user
                 c.execute('INSERT INTO authentication (username, password) VALUES (?, ?)', (username, password))
                 conn.commit()
+                c.execute('INSERT INTO followers_list (username) VALUES (?)', username)
                 conn.close()
                 flash('Account created successfully...', 'success')
                 return "Account created successfully"
@@ -299,6 +363,7 @@ def login():
                 conn.commit()
                 conn.close()
                 flash('Account Logged in successfully', 'success')
+
                 return('Logged in successfully')
             else:
                 return 'Invalid data received'
@@ -367,6 +432,8 @@ def addLike(username):
     
     return jsonify({'message' : 'Like successfully updated'})
 
+
+
 @app.route('/getProfile/<username>', methods=['GET'])
 def getProfile(username):
     conn = sqlite3.connect('./mains.db')
@@ -394,4 +461,4 @@ def getProfile(username):
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    socketio.run(app, host='0.0.0.0', port=5000)
