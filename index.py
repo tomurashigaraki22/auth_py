@@ -32,6 +32,35 @@ def send_notification(username, message):
 def connect():
     print('Client connected')
 
+@app.route('/getNotifs/<username>', methods=['GET', 'POST'])
+def get_notifs(username):
+    try:
+        conn = sqlite3.connect('./mains.db')
+        c = conn.cursor()
+        c.execute('SELECT * FROM notification_follow WHERE username = ?', (username, ))
+        notifications = c.fetchall()
+        conn.close()
+
+        if notifications:
+            notif_list = []
+            for notif in notifications:
+                notif_user_that_followed = notif[2].split(' ')
+                userthatfollowed = notif_user_that_followed[0]
+                print(userthatfollowed)
+                notif_dict = {
+                    'username': notif[1],
+                    'follower': userthatfollowed,
+                    'message': notif[2]
+                }
+                notif_list.append(notif_dict)
+            
+            return jsonify(notif_list)
+        else:
+            return jsonify({'message': 'No notifications found for the user'})
+    
+    except sqlite3.Error as e:
+        return jsonify({'error': str(e)})
+
 @app.route('/search/<query>', methods=['POST', 'GET'])
 def search(query):
     conn = sqlite3.connect('./mains.db')
