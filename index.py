@@ -110,20 +110,25 @@ def check_follow(username):
                 'status': 'following',
                 'no': len(f_d)
                 })
-        else:
+        elif username not in f_d:
             return jsonify({
                 'status': 'not_following',
                 'no': len(f_d)
                 })
+        else:
+            return jsonify({
+                'status': 'Error',
+                'no': 'No such one'
+            })
     else:
         return jsonify({'status': 'user_not_found',})
 
 
 
 
-@app.route('/addFollower/<username>/<usertofollow>', methods=['POST', 'GET'])
-def addFollower(username, usertofollow):
-    
+@app.route('/addFollower/<username>', methods=['POST', 'GET'])
+def addFollower(username):
+    usertofollow = request.form.get('to_follow')
     conn = sqlite3.connect('./mains.db')
     c = conn.cursor()
     
@@ -187,10 +192,11 @@ def addFollower(username, usertofollow):
 
     
     
-@app.route('/unfollow/<username>/<usertounfollow>', methods=['POST', 'GET'])
-def unfollow(username, usertounfollow):
-    
+@app.route('/unfollow/<username>', methods=['POST', 'GET'])
+def unfollow(username):
+    usertounfollow = request.form.get('to_unfollow')
     conn = sqlite3.connect('./mains.db')
+    print(usertounfollow)
     c = conn.cursor()
     
     # Fetch the current followers list for the user
@@ -216,10 +222,10 @@ def unfollow(username, usertounfollow):
             c.execute('UPDATE profiles SET followers = ? WHERE username = ?', (aa - 1, username))
             conn.commit()
             conn.close()
-            return jsonify({'message': f'{usertounfollow} unfollowed {username}'})
+            return jsonify({'message': f'{username} unfollowed {usertounfollow}'})
         else:
             conn.close()
-            return jsonify({'message': f'{usertounfollow} is not following {username}'})
+            return jsonify({'message': f'{username} is not following {usertounfollow}'})
     else:
         conn.close()
         return jsonify({'message': 'User not found'})
