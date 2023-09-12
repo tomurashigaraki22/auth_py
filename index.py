@@ -205,6 +205,7 @@ def addFollower(username):
         print(updated_followers)
         c.execute('INSERT INTO followers_list (username, followers_) VALUES (?, ?)', (usertofollow, updated_followers))
         conn.commit()
+        c.execute('UPDATE profiles SET followers = ? WHERE username = ?', (len(updated_followers), username))
         conn.close()
         return jsonify({ 'message': f'{usertofollow} has been added to followers list'})
     else:
