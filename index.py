@@ -144,55 +144,55 @@ def addFollower(username):
         if current_followers is None:
             current_followers = ''  # Set to an empty string if it's None
 
-        if username not in current_followers:
-            updated_followers = current_followers + ',' + username
-            print('Reached3')
-            c.execute('UPDATE followers_list SET followers_ = ? WHERE username = ?', (updated_followers, usertofollow))
-            conn.commit()
-            c.execute('SELECT * FROM following_list WHERE username = ?', (usertofollow,))
-            ss = c.fetchone()
-            if ss is not None:
-                c.execute('UPDATE following_list SET following = ? WHERE username = ?', (usertofollow, username))
+            if username not in current_followers:
+                updated_followers = current_followers + ',' + username
+                print('Reached3')
+                c.execute('UPDATE followers_list SET followers_ = ? WHERE username = ?', (updated_followers, usertofollow))
                 conn.commit()
-                c.execute('INSERT INTO notification_follow (username, follower) VALUES (?, ?)', (usertofollow, f'{username} has followed you'))
-                conn.commit()
-            elif ss is None:
-                c.execute('INSERT INTO following_list (username, following) VALUES (?, ?)', (usertofollow, username))
-                conn.commit()
-                c.execute('INSERT INTO notification_follow (username, follower) VALUES (?, ?)', (usertofollow, f'{username} has followed you'))
-                conn.commit()
+                c.execute('SELECT * FROM following_list WHERE username = ?', (usertofollow,))
+                ss = c.fetchone()
+                if ss is not None:
+                    c.execute('UPDATE following_list SET following = ? WHERE username = ?', (usertofollow, username))
+                    conn.commit()
+                    c.execute('INSERT INTO notification_follow (username, follower) VALUES (?, ?)', (usertofollow, f'{username} has followed you'))
+                    conn.commit()
+                elif ss is None:
+                    c.execute('INSERT INTO following_list (username, following) VALUES (?, ?)', (usertofollow, username))
+                    conn.commit()
+                    c.execute('INSERT INTO notification_follow (username, follower) VALUES (?, ?)', (usertofollow, f'{username} has followed you'))
+                    conn.commit()
 
-            # Check if the username exists in the profiles table
-            c.execute('SELECT followers FROM profiles WHERE username = ?', (usertofollow,))
-            profile_data = c.fetchone()
-            print(profile_data)
-            print(len(profile_data))
+                # Check if the username exists in the profiles table
+                c.execute('SELECT followers FROM profiles WHERE username = ?', (usertofollow,))
+                profile_data = c.fetchone()
+                print(profile_data)
+                print(len(profile_data))
 
-            if profile_data is not None:
-                # Update the followers count in the profiles table
-                print(current_followers)
-                updated_followers_count = len(current_followers) + 1
-                cs = current_followers.split(',')
-                css = len(cs) + 1
-                print(len(cs))
-                print(updated_followers_count)
-                c.execute('UPDATE profiles SET followers = ? WHERE username = ?', (css, usertofollow))
-                conn.commit()
-                conn.close()
-                return jsonify({'message': f'{username} is now following {usertofollow}'})
-            else:
-                conn.close()
-                return jsonify({'message': 'User not found in profiles table'})
+                if profile_data is not None:
+                    # Update the followers count in the profiles table
+                    print(current_followers)
+                    updated_followers_count = len(current_followers) + 1
+                    cs = current_followers.split(',')
+                    css = len(cs) + 1
+                    print(len(cs))
+                    print(updated_followers_count)
+                    c.execute('UPDATE profiles SET followers = ? WHERE username = ?', (css, usertofollow))
+                    conn.commit()
+                    conn.close()
+                    return jsonify({'message': f'{username} is now following {usertofollow}'})
+                else:
+                    conn.close()
+                    return jsonify({'message': 'User not found in profiles table'})
             
-        elif followers_data is None:
-            c.execute('INSERT INTO followers_list (username) VALUES (?)', (usertofollow, ))
-            conn.commit()
-            conn.close()
-            return jsonify({ 'message': f'{usertofollow} has been added to followers list'})
-        else:
-            print('Reached2')
-            conn.close()
-            return jsonify({'message': f'{username} is already following {usertofollow}'})
+    elif followers_data is None:
+        c.execute('INSERT INTO followers_list (username) VALUES (?)', (usertofollow, ))
+        conn.commit()
+        conn.close()
+        return jsonify({ 'message': f'{usertofollow} has been added to followers list'})
+    else:
+        print('Reached2')
+        conn.close()
+        return jsonify({'message': f'{username} is already following {usertofollow}'})
         
     # Rest of your code...
 
