@@ -22,6 +22,7 @@ c.execute('''CREATE TABLE IF NOT EXISTS profiles (id INTEGER PRIMARY KEY, userna
 c.execute('''CREATE TABLE IF NOT EXISTS followers_list (id INTEGER PRIMARY KEY, username TEXT, followers_ TEXT)''')
 c.execute('''CREATE TABLE IF NOT EXISTS notification_follow (id INTEGER PRIMARY KEY, username TEXT, follower TEXT)''')
 c.execute('''CREATE TABLE IF NOT EXISTS notification_unfollow (id INTEGER PRIMARY KEY, username TEXT, unfollower TEXT)''')
+c.execute('''CREATE TABLE IF NOT EXISTS following_list (id INTEGER PRIMARY KEY, username TEXT, following TEXT)''')
 conn.commit()
 conn.close()
 
@@ -148,8 +149,18 @@ def addFollower(username):
             print('Reached3')
             c.execute('UPDATE followers_list SET followers_ = ? WHERE username = ?', (updated_followers, usertofollow))
             conn.commit()
-            c.execute('INSERT INTO notification_follow (username, follower) VALUES (?, ?)', (usertofollow, f'{username} has followed you'))
-            conn.commit()
+            c.execute('SELECT * FROM following_list WHERE username = ?', (usertofollow,))
+            ss = c.fetchone()
+            if ss is not None:
+                c.execute('UPDATE following_list SET following = ? WHERE username = ?', (usertofollow, username))
+                conn.commit()
+                c.execute('INSERT INTO notification_follow (username, follower) VALUES (?, ?)', (usertofollow, f'{username} has followed you'))
+                conn.commit()
+            elif ss is None:
+                c.execute('INSERT INTO following_list (username, following) VALUES (?, ?)', (usertofollow, username))
+                conn.commit()
+                c.execute('INSERT INTO notification_follow (username, follower) VALUES (?, ?)', (usertofollow, f'{username} has followed you'))
+                conn.commit()
 
             # Check if the username exists in the profiles table
             c.execute('SELECT followers FROM profiles WHERE username = ?', (usertofollow,))
@@ -219,6 +230,17 @@ def unfollow(username):
             # Update the followers list in the database
             c.execute('UPDATE followers_list SET followers_ = ? WHERE username = ?', (updated_followers, username))
             conn.commit()
+            c.execute('SELECT following FROM following_list WHERE username = ?', (usertounfollow,))
+            sss = c.fetchone()
+            if sss is not None:
+                current_following = sss[0].split(',')
+                if username in current_following:
+                    current_following.remove(username)
+                    updated_following = ','.join(current_following)
+                    print(updated_following)
+                    c.execute('UPDATE following_list SET following = ? WHERE username = ?', (updated_following, usertounfollow))
+                    conn.commit()
+
             c.execute('UPDATE profiles SET followers = ? WHERE username = ?', (aa - 1, username))
             conn.commit()
             conn.close()
@@ -237,18 +259,18 @@ def main(username):
     c = conn.cursor()
 
     # Retrieve the followers list for the given username
-    c.execute('SELECT followers_ FROM followers_list WHERE username = ?', (username,))
-    followers_data = c.fetchone()
+    c.execute('SELECT following FROM following_list WHERE username = ?', (username,))
+    following_data = c.fetchone()
 
-    if followers_data:
-        followers_list = followers_data[0].split(',')
-        followers_list = [follower.strip() for follower in followers_list]  # Trim whitespace
-        print(followers_list)
+    if following_data:
+        following_list = following_data[0].split(',')
+        following_list = [following.strip() for following in following_list]  # Trim whitespace
+        print(following_list)
 
         # Fetch posts for each follower
         post_list_s = []
-        for follower in followers_list:
-            c.execute('SELECT * FROM posts WHERE username = ?', (follower,))
+        for following in following_list:
+            c.execute('SELECT * FROM posts WHERE username = ?', (following,))
             posts = c.fetchall()
             for post in posts:
                 img_url = post[2].replace('\\', '/') if post[2] else None
@@ -369,7 +391,7 @@ def register():
                 # Insert the new user
                 c.execute('INSERT INTO authentication (username, password) VALUES (?, ?)', (username, password))
                 conn.commit()
-                c.execute('INSERT INTO followers_list (username) VALUES (?)', username)
+                c.execute('INSERT INTO followers_list (username) VALUES (?)', (username,))
                 conn.close()
                 flash('Account created successfully...', 'success')
                 return "Account created successfully"
@@ -495,4 +517,4 @@ def getProfile(username):
 
 
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=5000)
+    socketio.run(app, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)
