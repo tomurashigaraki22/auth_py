@@ -123,7 +123,20 @@ def check_follow(username):
             })
     else:
         return jsonify({'status': 'user_not_found',})
+    
 
+@socketio.on('connect')
+def handle_connect():
+    print('Client connected')
+
+@socketio.on('custom_message')
+def handle_custom_message(data):
+    message = data['message']
+    sender = data['sender']
+    # Process the message data as needed
+    print(f'Received message from {sender}: {message}')
+    # Broadcast the message to all connected clients
+    socketio.emit('custom_message', {'sender': sender, 'message': message})
 
 
 
@@ -134,7 +147,7 @@ def addFollower(username):
     c = conn.cursor()
 
     # Fetch the current followers list for the user
-    c.execute('SELECT followers_ FROM followers_list WHERE username = ?', (usertofollow,))
+    c.execute('SELECT followers_ FROM followers_list WHERE username = ?', (usertofollow, ))
     followers_data = c.fetchone()
 
     if followers_data is not None:
@@ -272,8 +285,112 @@ def unfollow(username):
         return jsonify({'message': 'User not found'})
 
 
+@app.route('/getPosts/<username>', methods=['GET'])
+def getPosts(username):
+    conn = sqlite3.connect('./mains.db')
+    c = conn.cursor()
+
+    c.execute('SELECT following FROM following_list WHERE username = ?', (username,))
+    following_data = c.fetchone()
+
+    if following_data:
+        following_list = following_data[0].split(',')
+        following_list = [following.strip() for following in following_list]
+        print(following_list)
+
+        post_list = []  # To store the posts
+
+        # Determine the maximum ID
+        c.execute('SELECT MAX(id) FROM posts')
+        max_id = c.fetchone()[0]
+
+        if max_id is not None:
+            # Calculate the starting ID for fetching the latest 10 posts
+            start_id = max(max_id - 7, 1)  # Ensure start_id is at least 1
+
+            for following in following_list:
+                # Fetch the latest 10 posts from each following user
+                c.execute('SELECT * FROM posts WHERE username = ? AND id >= ? ORDER BY id DESC LIMIT 8', (following, start_id))
+                posts = c.fetchall()
+                
+                # Check the number of fetched posts
+                num_posts_fetched = len(posts)
+                
+                if num_posts_fetched < 8:
+                    # If fewer than 10 posts were fetched, fetch more posts to make up the difference
+                    additional_posts_needed = 8 - num_posts_fetched
+                    c.execute('SELECT * FROM posts WHERE username = ? AND id < ? ORDER BY id DESC LIMIT ?', (following, start_id, additional_posts_needed))
+                    additional_posts = c.fetchall()
+                    posts.extend(additional_posts)
+                for post in posts:
+                    img_url = post[2].replace('\\', '/') if post[2] else None
+                    post_dict = {
+                        'username': post[1],
+                        'caption': post[4],
+                        'likes': post[3],
+                        'height': post[5],
+                        'id': post[0],
+                        'img': img_url
+                    }
+                    post_list.append(post_dict)
+
+        return jsonify(post_list)
+
+    return jsonify([])  # Return an empty list if no following data found
+
+@app.route('/getMorePosts/<username>/<lastPostId>', methods=['GET', 'POST'])
+def getMorePosts(username, lastPostId):
+    conn = sqlite3.connect('./mains.db')
+    c = conn.cursor()
+
+
+    if lastPostId is None:
+        # Handle the case where no last post ID is provided
+        return jsonify(message='Last post ID is required'), 400
+    
+    c.execute('SELECT following FROM following_list WHERE username = ?', (username,))
+    following_data = c.fetchone()
+
+    if following_data:
+        following_list = following_data[0].split(',')
+        following_list = [following.strip() for following in following_list]
+        print(following_list)
+
+        post_list = []
+
+        for following_username in following_list:
+            # Fetch posts for each following username
+            c.execute('SELECT * FROM posts WHERE username = ? AND id <= ? ORDER BY id ASC LIMIT 10', (following_username, lastPostId))
+            more_posts = c.fetchall()
+
+            for post in more_posts:
+                img_url = post[2].replace('\\', '/') if post[2] else None
+                post_dict = {
+                    'username': post[1],
+                    'caption': post[4],
+                    'likes': post[3],
+                    'height': post[5],
+                    'id': post[0],
+                    'img': img_url
+                }
+                post_list.append(post_dict)
+
+        conn.close()
+        return jsonify(post_list)
+    
+    conn.close()
+    return jsonify([])  # Return an empty list if no following data found
+
+
+
+
+
 @app.route('/main/<username>', methods=['GET'])
 def main(username):
+    # Parse query parameters for pagination
+    page = request.args.get('page', default=1, type=int)
+    per_page = request.args.get('per_page', default=10, type=int)
+
     conn = sqlite3.connect('./mains.db')
     c = conn.cursor()
 
@@ -286,10 +403,11 @@ def main(username):
         following_list = [following.strip() for following in following_list]  # Trim whitespace
         print(following_list)
 
-        # Fetch posts for each follower
+        # Fetch posts for each follower with pagination
         post_list_s = []
         for following in following_list:
-            c.execute('SELECT * FROM posts WHERE username = ?', (following,))
+            c.execute('SELECT * FROM posts WHERE username = ? LIMIT ? OFFSET ?',
+                      (following, per_page, (page - 3) * per_page))
             posts = c.fetchall()
             for post in posts:
                 img_url = post[2].replace('\\', '/') if post[2] else None
@@ -298,7 +416,8 @@ def main(username):
                     'img': img_url,
                     'likes': post[3],
                     'caption': post[4],
-                    'height': post[5]
+                    'height': post[5],
+                    'id': post[0]
                 }
                 post_list_s.append(post_dict)
         conn.commit()
@@ -506,6 +625,32 @@ def addLike(username):
     conn.close()
     
     return jsonify({'message' : 'Like successfully updated'})
+
+
+@app.route('/getUsersFollowing/<username>', methods=['GET'])
+def getUsersFollowing(username):
+    conn = sqlite3.connect('./mains.db')
+    c = conn.cursor()
+
+    c.execute('SELECT following FROM following_list WHERE username = ?', (username,))
+    users = c.fetchone()
+    if users is not None:
+        following_list = users[0].split(',')  # Split the comma-separated list of usernames
+        profile_details = []  # Initialize an empty list to store profile details
+
+        for following_username in following_list:
+            # Call the /getProfile/<username> route for each user
+            response = getProfile(following_username)
+            if response.status_code == 200:  # Check if the response is successful
+                profile_data = response.get_json()
+                profile_details.append(profile_data)
+
+        conn.close()
+        return jsonify(profile_details)
+    else:
+        conn.close()
+        return jsonify({'error': 'User not found'}), 404
+
 
 
 
