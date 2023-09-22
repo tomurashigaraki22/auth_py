@@ -23,6 +23,7 @@ c.execute('''CREATE TABLE IF NOT EXISTS followers_list (id INTEGER PRIMARY KEY, 
 c.execute('''CREATE TABLE IF NOT EXISTS notification_follow (id INTEGER PRIMARY KEY, username TEXT, follower TEXT)''')
 c.execute('''CREATE TABLE IF NOT EXISTS notification_unfollow (id INTEGER PRIMARY KEY, username TEXT, unfollower TEXT)''')
 c.execute('''CREATE TABLE IF NOT EXISTS following_list (id INTEGER PRIMARY KEY, username TEXT, following TEXT)''')
+c.execute('''CREATE TABLE IF NOT EXISTS post_likers (id INTEGER PRIMARY KEY, post_id INTEGER, post_likers TEXT)''')
 conn.commit()
 conn.close()
 
@@ -137,6 +138,105 @@ def handle_custom_message(data):
     print(f'Received message from {sender}: {message}')
     # Broadcast the message to all connected clients
     socketio.emit('custom_message', {'sender': sender, 'message': message})
+
+@socketio.on('liked_post')
+def liked_post(data):
+    print('Liked Post')
+    id = data['id']
+    print(id)
+    like_no = data['like_no']
+    username = data['username']
+    print(username)
+    print(like_no)
+    
+    # Update the like count in the database
+    conn = sqlite3.connect('./mains.db')
+    c = conn.cursor()
+    new_likes = int(like_no) + 1
+    print(new_likes)
+
+    print('OK')
+    c.execute('SELECT * FROM post_likers WHERE post_id = ?', (id,))
+    print('1')
+    cs = c.fetchall()
+    if cs is not None:
+        c.execute('SELECT post_likers FROM post_likers WHERE post_id = ?', (id,))
+        print('2')
+        css = c.fetchone()
+        if css is not None:
+            cap = css[0]
+            if cap is None:
+                cap = ''
+            if username not in cap:
+                if not cap:
+                    updated_likers = username  # Set to username directly
+                else:
+                    updated_likers = cap + ',' + username
+
+                print(f'Updated Likers: {updated_likers}')
+                c.execute('UPDATE post_likers SET post_likers = ? WHERE post_id = ?', (updated_likers, id))
+                conn.commit()
+                c.execute('UPDATE posts SET likes = ? WHERE id = ?', (new_likes, id))
+                socketio.emit('liked_post', {'id': id, 'likes': new_likes, 'username': username})
+                print('Done')
+                conn.commit()
+                conn.close()
+            else:
+                unliked_post(data)
+
+    else:
+        c.execute('INSERT INTO post_likers (post_id, post_likers) VALUES (?, ?)', (id, username))
+        socketio.emit('liked_post', {'id': id, 'likes': new_likes, 'username': username})
+        conn.commit()
+        c.execute('UPDATE posts SET likes = ? WHERE id = ?', (new_likes, id))
+        conn.commit()
+        conn.close()
+    # Emit a Socket.IO event to notify clients about the change
+    
+
+@socketio.on('unliked_post')
+def unliked_post(data):
+    id = data['id']
+    username = data['username']
+    like_no = data['like_no']
+    print(f'Id, Uid, like_no {id}, {username}, {like_no}')
+
+    conn = sqlite3.connect('./mains.db')
+    c = conn.cursor()
+    new_likes = int(like_no) - 1
+
+    c.execute('SELECT * FROM post_likers WHERE post_id = ?', (id,))
+    css = c.fetchall()
+    if css is not None:
+        c.execute('SELECT post_likers FROM post_likers WHERE post_id = ?', (id,))
+        csss = c.fetchone()
+        if csss is not None:
+            pac = csss[0]
+            pacs = pac.split(',')
+            print('Pac:', pacs)
+            if not pacs:
+                pacs = []
+            if username in pacs:
+                pacs.remove(username)
+                upd_likers = ','.join(pacs)
+                c.execute('UPDATE post_likers SET post_likers = ? WHERE post_id = ?', (upd_likers, id))
+                conn.commit()
+                c.execute('UPDATE posts SET likes = ? WHERE id = ?', (new_likes, id))
+                conn.commit()
+            else:
+                return
+        else:
+            return
+    else:
+        return jsonify({'message': 'No such post'})
+    
+    socketio.emit('unliked_post', {'id': id, 'likes': new_likes, 'username': username})
+
+
+
+    
+
+
 
 
 
@@ -312,31 +412,37 @@ def getPosts(username):
                 # Fetch the latest 10 posts from each following user
                 c.execute('SELECT * FROM posts WHERE username = ? AND id >= ? ORDER BY id DESC LIMIT 8', (following, start_id))
                 posts = c.fetchall()
-                
-                # Check the number of fetched posts
-                num_posts_fetched = len(posts)
-                
-                if num_posts_fetched < 8:
-                    # If fewer than 10 posts were fetched, fetch more posts to make up the difference
-                    additional_posts_needed = 8 - num_posts_fetched
-                    c.execute('SELECT * FROM posts WHERE username = ? AND id < ? ORDER BY id DESC LIMIT ?', (following, start_id, additional_posts_needed))
-                    additional_posts = c.fetchall()
-                    posts.extend(additional_posts)
+
+                # Iterate through the fetched posts and check if they have been liked by the user
                 for post in posts:
                     img_url = post[2].replace('\\', '/') if post[2] else None
+
+                    # Check if the user has already liked the post
+                    c.execute('SELECT post_likers FROM post_likers WHERE post_id = ?', (post[0],))
+                    likers_data = c.fetchone()
+                    likers_string = likers_data[0] if likers_data else ''
+
+                    # Split the likers string into a list of usernames
+                    likers_list = likers_string.split(',')
+
+                    # Check if the username is in the list of likers
+                    already_liked = username in likers_list
+
                     post_dict = {
                         'username': post[1],
                         'caption': post[4],
                         'likes': post[3],
                         'height': post[5],
                         'id': post[0],
-                        'img': img_url
+                        'img': img_url,
+                        'alreadyLiked': already_liked  # Add a flag to indicate if the post has already been liked
                     }
                     post_list.append(post_dict)
 
         return jsonify(post_list)
 
     return jsonify([])  # Return an empty list if no following data found
+
 
 @app.route('/getMorePosts/<username>/<lastPostId>', methods=['GET', 'POST'])
 def getMorePosts(username, lastPostId):
