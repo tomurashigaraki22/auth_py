@@ -1,4 +1,4 @@
-from flask import Flask, request, flash, jsonify, send_from_directory
+from flask import Flask, request, flash, jsonify, send_from_directory, make_response
 import sqlite3
 import json
 import os
@@ -24,11 +24,88 @@ c.execute('''CREATE TABLE IF NOT EXISTS notification_follow (id INTEGER PRIMARY 
 c.execute('''CREATE TABLE IF NOT EXISTS notification_unfollow (id INTEGER PRIMARY KEY, username TEXT, unfollower TEXT)''')
 c.execute('''CREATE TABLE IF NOT EXISTS following_list (id INTEGER PRIMARY KEY, username TEXT, following TEXT)''')
 c.execute('''CREATE TABLE IF NOT EXISTS post_likers (id INTEGER PRIMARY KEY, post_id INTEGER, post_likers TEXT)''')
+c.execute('''CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, sender TEXT, receiver TEXT, message TEXT)''')
 conn.commit()
 conn.close()
 
 def send_notification(username, message):
     emit('notification', {'username': username, 'message': message}, namespace='/notifications')
+
+@socketio.on('send_message')
+def send_message(data):
+    try:
+        message = data.get('message')
+        sender = data.get('sender')
+        receiver = data.get('receiver')
+
+        if message and sender and receiver:
+            conn = sqlite3.connect('./mains.db')
+            c = conn.cursor()
+
+            c.execute('INSERT INTO messages (sender, receiver, message) VALUES (?, ?, ?)', (sender, receiver, message))
+            conn.commit()
+            conn.close()
+
+            socketio.emit('send_message', {'sender': sender, 'receiver': receiver, 'message': message})
+            # Emit a success message to the client if needed.
+            socketio.emit('message_success', {'message': 'Message sent successfully'})
+            socketio.emit('new_message', {'sender': sender, 'receiver': receiver, 'message_content': message})
+        else:
+            # Emit a failure message to the client if data is missing.
+            socketio.emit('message_failure', {'message': 'Incomplete message data'})
+
+    except Exception as e:
+        # Handle any exceptions that may occur during database insertion.
+        # You can log the error or emit an error message to the client.
+        print(f"Error: {str(e)}")
+        socketio.emit('message_failure', {'message': 'An error occurred while sending the message'})
+
+
+@socketio.on('new_message')
+def new_message(data):
+    sender = data['sender']
+    receiver = data['receiver']
+    message_content = data['message_content']
+
+    socketio.emit('new_message', {'sender': sender, 'receiver': receiver, 'message_content': message_content})
+
+
+@app.route('/retrieveMessage/<username>/<chatWith>', methods=['GET'])
+def retrieveMessage(username, chatWith):
+    try:
+        conn = sqlite3.connect('./mains.db')
+        c = conn.cursor()
+        c.execute('SELECT * FROM messages WHERE (sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?)',
+                  (username, chatWith, chatWith, username))
+        messages = c.fetchall()
+        conn.close()
+
+        message_list = []
+
+        if messages:
+            for message in messages:
+                m_list = {
+                    'Id': message[0],
+                    'sender': message[1],
+                    'receiver': message[2],
+                    'message': message[3],
+                    'hasNewMessage': False  # Initialize hasNewMessage as False by default
+                }
+                message_list.append(m_list)
+
+        return jsonify(message_list)
+
+    except sqlite3.Error as e:
+        # Handle database connection or query errors.
+        print(f"Database error: {str(e)}")
+        return jsonify({'error': 'An error occurred while retrieving messages'})
+
+    except Exception as e:
+        # Handle other exceptions.
+        print(f"Error: {str(e)}")
+        return jsonify({'error': 'An unexpected error occurred'})
+
+
 
 @socketio.on('connect', namespace='/notifications')
 def connect():
@@ -184,14 +261,14 @@ def liked_post(data):
             else:
                 unliked_post(data)
 
-    else:
-        c.execute('INSERT INTO post_likers (post_id, post_likers) VALUES (?, ?)', (id, username))
-        socketio.emit('liked_post', {'id': id, 'likes': new_likes, 'username': username})
-        conn.commit()
-        c.execute('UPDATE posts SET likes = ? WHERE id = ?', (new_likes, id))
-        conn.commit()
-        conn.close()
-    # Emit a Socket.IO event to notify clients about the change
+        else:
+            c.execute('INSERT INTO post_likers (post_id, post_likers) VALUES (?, ?)', (id, username))
+            socketio.emit('liked_post', {'id': id, 'likes': new_likes, 'username': username})
+            conn.commit()
+            c.execute('UPDATE posts SET likes = ? WHERE id = ?', (new_likes, id))
+            conn.commit()
+            conn.close()
+        # Emit a Socket.IO event to notify clients about the change
     
 
 @socketio.on('unliked_post')
@@ -406,7 +483,7 @@ def getPosts(username):
 
         if max_id is not None:
             # Calculate the starting ID for fetching the latest 10 posts
-            start_id = max(max_id - 7, 1)  # Ensure start_id is at least 1
+            start_id = max(max_id - 10, 1)  # Ensure start_id is at least 1
 
             for following in following_list:
                 # Fetch the latest 10 posts from each following user
@@ -436,6 +513,62 @@ def getPosts(username):
                         'id': post[0],
                         'img': img_url,
                         'alreadyLiked': already_liked  # Add a flag to indicate if the post has already been liked
+                    }
+                    post_list.append(post_dict)
+
+        return jsonify(post_list)
+
+    return jsonify([])  # Return an empty list if no following data found
+
+@app.route('/fetchPosts/<username>', methods=['GET'])
+def fetchPosts(username):
+    conn = sqlite3.connect('./mains.db')
+    c = conn.cursor()
+    c.execute('SELECT following FROM following_list WHERE username = ?', (username,))
+    following_data = c.fetchone()
+
+    if following_data:
+        following_list = following_data[0].split(',')
+        following_list = [following.strip() for following in following_list]
+        following_list.append(username)
+        print(following_list)
+
+        post_list = []  # To store the posts
+
+        # Determine the maximum ID
+        c.execute('SELECT MAX(id) FROM posts')
+        max_id = c.fetchone()[0]
+
+        if max_id is not None:
+            # Calculate the starting ID for fetching the latest 10 posts
+            start_id = max(max_id - 10, 1)  # Ensure start_id is at least 1
+
+            for following in following_list:
+                # Fetch the latest 10 posts from each following user
+                c.execute('SELECT * FROM posts WHERE username = ? AND id >= ? ORDER BY id DESC LIMIT 8', (following, start_id))
+                posts = c.fetchall()
+
+                for post in posts:
+                    img_url = post[2].replace('\\', '/') if post[2] else None
+                    c.execute('SELECT post_likers FROM post_likers WHERE post_id = ?', (post[0],))
+                    likers_data = c.fetchone()
+                    likers_string = likers_data[0] if likers_data else ''
+
+                    # Split the likers string into a list of usernames
+                    likers_list = likers_string.split(',')
+
+                    # Check if the username is in the list of likers
+                    already_liked = username in likers_list
+                    isVideo = img_url.endswith('.mp4')
+                    post_dict = {
+                        'username': post[1],
+                        'caption': post[4],
+                        'likes': post[3],
+                        'height': post[5],
+                        'id': post[0],
+                        'img': img_url,
+                        'alreadyLiked': already_liked,  # Add a flag to indicate if the post has already been liked
+                        'isVideo': isVideo
                     }
                     post_list.append(post_dict)
 
@@ -486,6 +619,8 @@ def getMorePosts(username, lastPostId):
     
     conn.close()
     return jsonify([])  # Return an empty list if no following data found
+
+
 
 
 
@@ -562,10 +697,28 @@ def home(username):
     else:
         return jsonify({'message': 'No posts found for this user'})
     
+
 @app.route('/uploads/<path:filename>')
-def serve_file(filename):
-    root_dir = os.path.dirname(os.path.abspath(__file__))
-    return send_from_directory(os.path.join(root_dir, 'uploads'), filename)
+def serve_video(filename):
+    video_path = 'uploads'  # Replace with the actual path to your video files directory
+    full_path = os.path.join(video_path, filename)
+
+    # Check if the file exists
+    if not os.path.isfile(full_path):
+        return "Video not found", 404
+
+    # Determine the content type based on the file extension
+    if filename.endswith('.mp4'):
+        content_type = 'video/mp4'
+    else:
+        root_dir = os.path.dirname(os.path.abspath(__file__))
+        return send_from_directory(os.path.join(root_dir, 'uploads'), filename)
+
+    # Set the Content-Disposition header to display the file inline
+    response = make_response(send_from_directory(video_path, filename, mimetype=content_type))
+    response.headers['Content-Disposition'] = f'inline; filename="{filename}"'
+
+    return response
     
 @app.route('/addPost/<username>', methods=['POST'])
 def addPost(username):
@@ -601,12 +754,57 @@ def addPost(username):
                 # Correct the image URL by replacing backslashes with forward slashes
                 image_url = f"http://192.168.43.147:5000/{image_path.replace(os.path.sep, '/')}"
 
-                return jsonify({'message': 'Post added successfully', 'image_path': image_url})
+                return jsonify({'message': 'Post added successfully', 'image_path': image_url}), 200
             else:
                 conn.close()
                 return jsonify({'message': 'Username not found'}), 404
         else:
             return jsonify({'message': 'Caption is required'}), 409
+    except Exception as e:
+        return jsonify({'message': f'Error: {str(e)}'}), 500
+    
+@app.route('/addVideo/<username>', methods=['POST'])
+def addVideo(username):
+    try:
+        caption = request.form.get('caption')
+        height = request.form.get('height')
+        likes = 0
+
+        if caption is not None:
+            conn = sqlite3.connect('./mains.db')
+            c = conn.cursor()
+            c.execute('SELECT * FROM profiles WHERE username = ?', (username,))
+            existing_user = c.fetchone()
+
+            if existing_user:
+                upload_dir = 'uploads'
+                current_timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')[:-3]  # Format timestamp
+                filename = secure_filename(f"{current_timestamp}.mp4")
+                if not os.path.exists(upload_dir):
+                    os.makedirs(upload_dir)
+                vid_path = os.path.join(upload_dir, filename)
+                vid_data = request.files.get('video')
+                if vid_data is None:
+                    print("No video file found in the request.")
+                else:
+                    print(f"Received video file: {vid_data.filename}")
+                    vid_data.save(vid_path)
+
+
+                c.execute('INSERT INTO posts (username, img, likes, caption, height) VALUES(?, ?, ?, ?, ?)', (username, vid_path, likes, caption, height))
+                conn.commit()
+                conn.close()
+
+                vid_url = f"http://192.168.43.228:5000/{vid_path.replace(os.path.sep, '/')}"
+
+                return jsonify({'message': 'Video Upload Successful', 'vid_path':vid_url, 'status': 200}), 200
+            else:
+                conn.close()
+                return jsonify({'message': 'Username not found'}), 404
+        else:
+            return jsonify({'message': 'Caption is required'}), 409
+
+
     except Exception as e:
         return jsonify({'message': f'Error: {str(e)}'}), 500
 
@@ -783,6 +981,12 @@ def getProfile(username):
         return jsonify(profile_data)
     else:
         return jsonify({'error': 'User not found'}), 404
+
+
+
+            
+
+        
 
 
 
