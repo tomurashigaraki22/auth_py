@@ -6,6 +6,7 @@ import datetime
 from werkzeug.utils import secure_filename
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
+from datetime import datetime
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'orenonawaerenjaeger'
@@ -24,12 +25,48 @@ c.execute('''CREATE TABLE IF NOT EXISTS notification_follow (id INTEGER PRIMARY 
 c.execute('''CREATE TABLE IF NOT EXISTS notification_unfollow (id INTEGER PRIMARY KEY, username TEXT, unfollower TEXT)''')
 c.execute('''CREATE TABLE IF NOT EXISTS following_list (id INTEGER PRIMARY KEY, username TEXT, following TEXT)''')
 c.execute('''CREATE TABLE IF NOT EXISTS post_likers (id INTEGER PRIMARY KEY, post_id INTEGER, post_likers TEXT)''')
-c.execute('''CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, sender TEXT, receiver TEXT, message TEXT)''')
+c.execute('''CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, sender TEXT, receiver TEXT, message TEXT, timestamp TEXT)''')
 conn.commit()
 conn.close()
 
+@app.route('/getUsersFollowing/<username>', methods=['GET'])
+def getUsersFollowing(username):
+    conn = sqlite3.connect('./mains.db')
+    c = conn.cursor()
+
+    # Get the list of users that 'username' is following
+    c.execute('SELECT following FROM following_list WHERE username = ?', (username,))
+    users = c.fetchone()
+    
+    if users is not None:
+        following_list = users[0].split(',')  # Split the comma-separated list of usernames
+        mutual_followers = []  # Initialize a list to store mutual followers
+
+        # Check each user in the following_list
+        for following_username in following_list:
+            # Query the followers_list table to check if it's a mutual follower
+            c.execute('SELECT * FROM followers_list WHERE username = ? AND follower_username = ?', (following_username, username))
+            result = c.fetchone()
+            
+            if result is not None:
+                # If it's a mutual follower, add them to the list
+                mutual_followers.append(following_username)
+
+        conn.close()
+        return jsonify(mutual_followers)
+    else:
+        conn.close()
+        return jsonify({'error': 'User not found'}), 404
+
+
+
 def send_notification(username, message):
     emit('notification', {'username': username, 'message': message}, namespace='/notifications')
+
+@socketio.on('new_chatter')
+def new_chatter(data):
+    #Tomiwa finish this route
+    return
 
 @socketio.on('send_message')
 def send_message(data):
@@ -42,14 +79,18 @@ def send_message(data):
             conn = sqlite3.connect('./mains.db')
             c = conn.cursor()
 
-            c.execute('INSERT INTO messages (sender, receiver, message) VALUES (?, ?, ?)', (sender, receiver, message))
+            # Get the current timestamp in the format 'HH:MM:SS'
+            timestamp = datetime.now().strftime('%H:%M')
+
+            c.execute('INSERT INTO messages (sender, receiver, message, timestamp) VALUES (?, ?, ?, ?)',
+                      (sender, receiver, message, timestamp))
             conn.commit()
             conn.close()
 
-            socketio.emit('send_message', {'sender': sender, 'receiver': receiver, 'message': message})
+            socketio.emit('send_message', {'sender': sender, 'receiver': receiver, 'message': message, 'timestamp': timestamp})
             # Emit a success message to the client if needed.
             socketio.emit('message_success', {'message': 'Message sent successfully'})
-            socketio.emit('new_message', {'sender': sender, 'receiver': receiver, 'message_content': message})
+            socketio.emit('new_message', {'sender': sender, 'receiver': receiver, 'message_content': message, 'timestamp': timestamp})
         else:
             # Emit a failure message to the client if data is missing.
             socketio.emit('message_failure', {'message': 'Incomplete message data'})
@@ -89,6 +130,7 @@ def retrieveMessage(username, chatWith):
                     'sender': message[1],
                     'receiver': message[2],
                     'message': message[3],
+                    'timestamp': message[4],
                     'hasNewMessage': False  # Initialize hasNewMessage as False by default
                 }
                 message_list.append(m_list)
@@ -311,11 +353,6 @@ def unliked_post(data):
 
 
 
-    
-
-
-
-
 
 @app.route('/addFollower/<username>', methods=['POST', 'GET'])
 def addFollower(username):
@@ -339,16 +376,16 @@ def addFollower(username):
             print('Reached3')
             c.execute('UPDATE followers_list SET followers_ = ? WHERE username = ?', (updated_followers, usertofollow))
             conn.commit()
-            c.execute('SELECT following FROM following_list WHERE username = ?', (usertofollow,))
+            c.execute('SELECT following FROM following_list WHERE username = ?', (username,))
             ss = c.fetchone()
             if ss is not None:
                 current_following = ss[0].split(',')
-                if username not in current_following:
+                if usertofollow not in current_following:
+                    current_following.append(usertofollow)  # Add your username to the list
                     updated_following = ','.join(current_following)
-                    print(updated_following)
-                    print('Did you')
                     c.execute('UPDATE following_list SET following = ? WHERE username = ?', (updated_following, username))
                     conn.commit()
+
                     print('I did')
                     c.execute('INSERT INTO notification_follow (username, follower) VALUES (?, ?)', (usertofollow, f'{username} has followed you'))
                     conn.commit()
@@ -527,7 +564,7 @@ def fetchPosts(username):
     c.execute('SELECT following FROM following_list WHERE username = ?', (username,))
     following_data = c.fetchone()
 
-    if following_data:
+    if following_data is not None:
         following_list = following_data[0].split(',')
         following_list = [following.strip() for following in following_list]
         following_list.append(username)
@@ -912,6 +949,14 @@ def addProfile():
         c = conn.cursor()
         c.execute('INSERT INTO profiles (username, img, bio, followers, following, post_no) VALUES (?, ?, ?, ?, ?, ?)', (username, img, bio, followers, following, post_no))
         conn.commit()
+        c.execute('INSERT INTO following_list (username) VALUES (?)', (username,))
+        conn.commit()
+        c.execute('INSERT INTO notification_follow (username) VALUES (?)', (username,))
+        conn.commit()
+        c.execute('INSERT INTO notification_unfollow (username) VALUES (?)', (username,))
+        conn.commit()
+        c.execute('INSERT INTO followers_list (username) VALUES (?)', (username,))
+        conn.commit()
         conn.close()
         return jsonify({'message': 'Profile added successfully'})
     
@@ -929,32 +974,6 @@ def addLike(username):
     conn.close()
     
     return jsonify({'message' : 'Like successfully updated'})
-
-
-@app.route('/getUsersFollowing/<username>', methods=['GET'])
-def getUsersFollowing(username):
-    conn = sqlite3.connect('./mains.db')
-    c = conn.cursor()
-
-    c.execute('SELECT following FROM following_list WHERE username = ?', (username,))
-    users = c.fetchone()
-    if users is not None:
-        following_list = users[0].split(',')  # Split the comma-separated list of usernames
-        profile_details = []  # Initialize an empty list to store profile details
-
-        for following_username in following_list:
-            # Call the /getProfile/<username> route for each user
-            response = getProfile(following_username)
-            if response.status_code == 200:  # Check if the response is successful
-                profile_data = response.get_json()
-                profile_details.append(profile_data)
-
-        conn.close()
-        return jsonify(profile_details)
-    else:
-        conn.close()
-        return jsonify({'error': 'User not found'}), 404
-
 
 
 
