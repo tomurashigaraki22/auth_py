@@ -42,21 +42,25 @@ def getUsersFollowing(username):
         following_list = users[0].split(',')  # Split the comma-separated list of usernames
         mutual_followers = []  # Initialize a list to store mutual followers
 
-        # Check each user in the following_list
+        # Iterate through the followers_list table
         for following_username in following_list:
             # Query the followers_list table to check if it's a mutual follower
-            c.execute('SELECT * FROM followers_list WHERE username = ? AND follower_username = ?', (following_username, username))
-            result = c.fetchone()
+            c.execute('SELECT * FROM followers_list WHERE username = ?', (username,))
+            ss = c.fetchone()
+            c.execute('SELECT username FROM followers_list WHERE followers_ LIKE ?', ('%' + following_username + '%',))
+            results = c.fetchall()
             
-            if result is not None:
-                # If it's a mutual follower, add them to the list
-                mutual_followers.append(following_username)
+            # Check if the original username exists in the results, meaning they follow each other
+            for result in results:
+                if username in result:
+                    mutual_followers.append({'username': following_username, 'img': 'https://blog.radware.com/wp-content/uploads/2020/06/anonymous.jpg'})
 
         conn.close()
         return jsonify(mutual_followers)
     else:
         conn.close()
         return jsonify({'error': 'User not found'}), 404
+
 
 
 
