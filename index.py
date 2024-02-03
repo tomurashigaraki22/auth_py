@@ -4,6 +4,7 @@ import json
 import os
 import datetime
 from werkzeug.utils import secure_filename
+import jwt
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from datetime import datetime
@@ -262,59 +263,40 @@ def handle_custom_message(data):
     # Broadcast the message to all connected clients
     socketio.emit('custom_message', {'sender': sender, 'message': message})
 
+
 @socketio.on('liked_post')
 def liked_post(data):
-    print('Liked Post')
     id = data['id']
-    print(id)
-    like_no = data['like_no']
     username = data['username']
-    print(username)
-    print(like_no)
-    
-    # Update the like count in the database
+    like_no = data['like_no']
+    alreadyLiked = data['alreadyLiked']
+    print(f'Id: {id}, Username: {username}, Like Number: {like_no}, AlreadyLiked: {alreadyLiked}')
+
     conn = sqlite3.connect('./mains.db')
     c = conn.cursor()
-    new_likes = int(like_no) + 1
-    print(new_likes)
-
-    print('OK')
-    c.execute('SELECT * FROM post_likers WHERE post_id = ?', (id,))
-    print('1')
-    cs = c.fetchall()
+    c.execute('SELECT likes FROM posts WHERE id = ?', (id,))
+    cs = c.fetchone()
+    print(cs)
     if cs is not None:
-        c.execute('SELECT post_likers FROM post_likers WHERE post_id = ?', (id,))
-        print('2')
-        css = c.fetchone()
-        if css is not None:
-            cap = css[0]
-            if cap is None:
-                cap = ''
-            if username not in cap:
-                if not cap:
-                    updated_likers = username  # Set to username directly
-                else:
-                    updated_likers = cap + ',' + username
-
-                print(f'Updated Likers: {updated_likers}')
-                c.execute('UPDATE post_likers SET post_likers = ? WHERE post_id = ?', (updated_likers, id))
-                conn.commit()
-                c.execute('UPDATE posts SET likes = ? WHERE id = ?', (new_likes, id))
-                socketio.emit('liked_post', {'id': id, 'likes': new_likes, 'username': username})
-                print('Done')
-                conn.commit()
-                conn.close()
-            else:
-                unliked_post(data)
-
-        else:
-            c.execute('INSERT INTO post_likers (post_id, post_likers) VALUES (?, ?)', (id, username))
-            socketio.emit('liked_post', {'id': id, 'likes': new_likes, 'username': username})
-            conn.commit()
-            c.execute('UPDATE posts SET likes = ? WHERE id = ?', (new_likes, id))
+        people_liked = cs[0]
+        print(people_liked)
+        if people_liked is None:
+            people_liked = ''
+            updated_likers = str(username)
+            print(f'Updated Likers: {updated_likers}')
+            c.execute('UPDATE posts SET likes = ? WHERE id = ?', (updated_likers, id))
             conn.commit()
             conn.close()
-        # Emit a Socket.IO event to notify clients about the change
+        elif people_liked is not None:
+            print(people_liked)
+            updated_likers = people_liked + ',' + username
+            print(f'Updated Likers: {updated_likers}')
+            c.execute('UPDATE posts SET likes = ? WHERE id = ?', (updated_likers, id))
+            conn.commit()
+            conn.close()
+            
+
+
     
 
 @socketio.on('unliked_post')
@@ -326,19 +308,17 @@ def unliked_post(data):
 
     conn = sqlite3.connect('./mains.db')
     c = conn.cursor()
-    new_likes = int(like_no) - 1
+    new_likes = max(int(like_no) - 1, 0)  # Ensure likes never go below 0
 
     c.execute('SELECT * FROM post_likers WHERE post_id = ?', (id,))
     css = c.fetchall()
-    if css is not None:
+    if css:
         c.execute('SELECT post_likers FROM post_likers WHERE post_id = ?', (id,))
         csss = c.fetchone()
-        if csss is not None:
+        if csss:
             pac = csss[0]
             pacs = pac.split(',')
             print('Pac:', pacs)
-            if not pacs:
-                pacs = []
             if username in pacs:
                 pacs.remove(username)
                 upd_likers = ','.join(pacs)
@@ -346,14 +326,17 @@ def unliked_post(data):
                 conn.commit()
                 c.execute('UPDATE posts SET likes = ? WHERE id = ?', (new_likes, id))
                 conn.commit()
+                # Emit a Socket.IO event to notify clients about the change
+                socketio.emit('unliked_post', {'id': id, 'likes': new_likes, 'username': username})
             else:
                 return
         else:
             return
     else:
         return jsonify({'message': 'No such post'})
-    
-    socketio.emit('unliked_post', {'id': id, 'likes': new_likes, 'username': username})
+
+    conn.close()
+
 
 
 
@@ -591,15 +574,20 @@ def fetchPosts(username):
 
                 for post in posts:
                     img_url = post[2].replace('\\', '/') if post[2] else None
-                    c.execute('SELECT post_likers FROM post_likers WHERE post_id = ?', (post[0],))
-                    likers_data = c.fetchone()
-                    likers_string = likers_data[0] if likers_data else ''
+                    c.execute('SELECT likes from posts WHERE id = ?', (post[0],))
+                    cs = c.fetchone()
+                    l = cs[0]
+                    print(l)
 
-                    # Split the likers string into a list of usernames
-                    likers_list = likers_string.split(',')
+                    # Check if the likes field is not None before splitting
+                    if l is not None:
+                        css = l.split(',')
+                        # Check if the username is in the list of likers
+                        already_liked = username in css
+                    else:
+                        already_liked = False
 
-                    # Check if the username is in the list of likers
-                    already_liked = username in likers_list
+                    print(already_liked)
                     isVideo = img_url.endswith('.mp4')
                     post_dict = {
                         'username': post[1],
@@ -616,6 +604,7 @@ def fetchPosts(username):
         return jsonify(post_list)
 
     return jsonify([])  # Return an empty list if no following data found
+
 
 
 @app.route('/getMorePosts/<username>/<lastPostId>', methods=['GET', 'POST'])
@@ -851,63 +840,74 @@ def addVideo(username):
 
 
 
-@app.route('/register', methods=['POST'])
-def register():
+@app.route('/signup', methods=['POST'])
+def signup():
+    print('here')
     if request.method == 'POST':
         try:
-            data = json.loads(request.data)  # Parse JSON data
-            username = data.get('username')
-            password = data.get('password')
-
-            if username is not None and password is not None:
-                conn = sqlite3.connect('./mains.db')
-                c = conn.cursor()
-
-                # Check if username already exists
-                c.execute('SELECT * FROM authentication WHERE username = ?', (username,))
-                existing_user = c.fetchone()
-
-                if existing_user is not None:
-                    conn.close()
-                    return 'Username already exists', 409  # Return 409 status code
-
-                # Insert the new user
-                c.execute('INSERT INTO authentication (username, password) VALUES (?, ?)', (username, password))
-                conn.commit()
-                c.execute('INSERT INTO followers_list (username) VALUES (?)', (username,))
-                conn.close()
-                flash('Account created successfully...', 'success')
-                return "Account created successfully"
+            username = request.form.get('username')
+            conn = sqlite3.connect('./mains.db')
+            c = conn.cursor()
+            c.execute('SELECT * FROM authentication WHERE username = ?', (username,))
+            cs = c.fetchone()
+            conn.close()
+            if cs is not None:
+                return jsonify({'message': 'User already exists', 'status': 409})
             else:
-                return "Invalid data received"
-        except json.JSONDecodeError:
-            return "Invalid JSON data received"
+                password = request.form.get('password')
+                if len(username) > 3:
+                    conn = sqlite3.connect('./mains.db')
+                    c = conn.cursor()
+                    c.execute('INSERT INTO authentication (username, password) VALUES (?, ?)', (username, password))
+                    conn.commit()
+                    conn.close()
+                    payload = {
+                        'username': username,
+                        'password': password,
+                    }
+                    jwt_token = jwt.encode(payload, app.secret_key, algorithm='HS256')
+                    
+
+                    return jsonify({'message': 'Signup Successful', 'status': 200, 'token': jwt_token})
+                else:
+                    return jsonify({'message': 'Not a valid username', 'status': 509})
+        except Exception as e:
+            return jsonify({'message': 'Error. Db may be busy', 'exception': str(e)})
 
 
-@app.route('/login', methods=['POST'])  # Fixed route definition and methods
+@app.route('/login', methods=['POST'])
 def login():
     if request.method == 'POST':
         try:
-            data = json.loads(request.data)
-            username = data.get('username')
-            password = data.get('password')
-
-            if username is not None and password is not None:
+            username = request.form.get('username')
+            password = request.form.get('password')
+            print('reach')
+            if len(username) > 3:
+                print('mi')
                 conn = sqlite3.connect('./mains.db')
                 c = conn.cursor()
+                print('reach2')
                 c.execute('SELECT * FROM authentication WHERE username = ? AND password = ?', (username, password))
-                user = c.fetchone()
-                if user is None:
-                    return 'Invalid username or password', 409
-                conn.commit()
-                conn.close()
-                flash('Account Logged in successfully', 'success')
-
-                return('Logged in successfully')
+                cs = c.fetchone()
+                print('reach3')
+                payload = {
+                    'username': username,
+                    'password': password,
+                }
+                print('reach4')
+                jwt_token = jwt.encode(payload, app.secret_key, algorithm='HS256')
+                if cs is not None:
+                    return jsonify({'message': 'Login Successful', 'status': 200, 'token': jwt_token})
+                else:
+                    print('Status: 404')
+                    return jsonify({'message': 'Incorrect username or Password', 'status': 404})
             else:
-                return 'Invalid data received'
-        except json.JSONDecodeError:
-            return 'Invalid JSON data received'
+                return jsonify({'message': 'Not a valid username', 'status': 509})
+
+        except Exception as e:
+            return jsonify({'message': 'Error. Db may be busy', 'Exception': str(e)})
+    else:
+        return
         
 
 @app.route('/upload', methods=['POST'])
@@ -1014,4 +1014,4 @@ def getProfile(username):
 
 
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)
+    socketio.run(app, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True, use_reloader=True)
